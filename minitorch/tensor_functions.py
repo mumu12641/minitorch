@@ -89,11 +89,13 @@ class Inv(Function):
 class Add(Function):
     @staticmethod
     def forward(ctx: Context, t1: Tensor, t2: Tensor) -> Tensor:
+        ctx.save_for_backward(t1, t2)
         return t1.f.add_zip(t1, t2)
 
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, Tensor]:
-        return grad_output, grad_output
+        (t1, t2) = ctx.saved_values
+        return t1.expand(grad_output), t2.expand(grad_output)
 
 
 class Mul(Function):
@@ -104,29 +106,35 @@ class Mul(Function):
 
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, Tensor]:
+        backend = grad_output.f
         (a, b) = ctx.saved_values
-        return (
-            grad_output.f.mul_zip(grad_output, b),
-            grad_output.f.mul_zip(grad_output, a),
+        grad_a, grad_b = a.expand(backend.mul_zip(b, grad_output)), b.expand(
+            backend.mul_zip(a, grad_output)
         )
+        return grad_a, grad_b
+        # return (
+        #     grad_output.f.mul_zip(grad_output, b),
+        #     grad_output.f.mul_zip(grad_output, a),
+        # )
 
 
 class Sigmoid(Function):
     @staticmethod
     def forward(ctx: Context, t1: Tensor) -> Tensor:
-        ctx.save_for_backward(t1)
+        t2 = t1.f.sigmoid_map(t1)
+        ctx.save_for_backward(t2)
 
         return t1.f.sigmoid_map(t1)
 
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tensor:
-        (t1,) = ctx.saved_values
-        sigmoid_t1 = t1.f.sigmoid_map(t1)
-        # one_tensor = t1.f.sigmoid_map(t1) * 0 + 1.0  # 创建全1张量
-        # sigmoid_derivative = sigmoid_t1.f.mul_zip(sigmoid_t1, one_tensor - sigmoid_t1)
-
-        # 根据链式法则，将梯度输出与 sigmoid 导数相乘
-        # return grad_output.f.mul_zip(grad_output, sigmoid_derivative)
+        backend: TensorBackend = grad_output.f
+        (t2,) = ctx.saved_values
+        all_one = _tensor([1.0], (1,))
+        return backend.mul_zip(
+            grad_output,
+            backend.mul_zip(t2, backend.add_zip(all_one, backend.neg_map(t2))),
+        )
 
 
 class ReLU(Function):
@@ -193,8 +201,7 @@ class LT(Function):
 
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, Tensor]:
-        # TODO: Implement for Task 2.4.
-        raise NotImplementedError("Need to implement for Task 2.4")
+        return grad_output.zeros(), grad_output.zeros()
 
 
 class EQ(Function):
@@ -204,8 +211,7 @@ class EQ(Function):
 
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, Tensor]:
-        # TODO: Implement for Task 2.4.
-        raise NotImplementedError("Need to implement for Task 2.4")
+        return grad_output.zeros(), grad_output.zeros()
 
 
 class IsClose(Function):
@@ -217,12 +223,15 @@ class IsClose(Function):
 class Permute(Function):
     @staticmethod
     def forward(ctx: Context, a: Tensor, order: Tensor) -> Tensor:
-        return Tensor(a._tensor.permute(*order), backend=a.backend)
+        ctx.save_for_backward(order)
+        return a._new(a._tensor.permute(*[int(order[i]) for i in range(order.size)]))
 
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, float]:
-        # TODO: Implement for Task 2.4.
-        raise NotImplementedError("Need to implement for Task 2.4")
+        (order,) = ctx.saved_values
+        order_list = [int(order[i]) for i in range(order.size)]
+        order_list = [i for i, _ in sorted(enumerate(order_list), key=lambda x: x[1])]
+        return grad_output._new(grad_output._tensor.permute(*order_list)), 0.0
 
 
 class View(Function):
